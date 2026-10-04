@@ -12,6 +12,7 @@ import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import StatBadge from '@/components/common/StatBadge.vue'
 import VigorTag from '@/components/common/VigorTag.vue'
 import { useTreeStore } from '@/stores/treeStore'
+import { useRoleStore } from '@/stores/roleStore'
 import {
   PROTECT_LEVEL_OPTIONS,
   TREE_SPECIES_CANDIDATES,
@@ -22,6 +23,7 @@ import {
 
 const router = useRouter()
 const treeStore = useTreeStore()
+const roleStore = useRoleStore()
 
 const dialogVisible = ref(false)
 const submitting = ref(false)
@@ -157,12 +159,21 @@ function handleFilterChange(key: string, value: string): void {
       <template #header>
         <div class="card-header">
           <span class="card-header__title">古树名木一树一档</span>
-          <el-button type="primary" @click="openCreate">
+          <el-button v-if="roleStore.isProtection()" type="primary" @click="openCreate">
             <el-icon><Plus /></el-icon>
             <span>新建古树档案</span>
           </el-button>
         </div>
       </template>
+
+      <el-alert
+        v-if="roleStore.isPatrol()"
+        type="info"
+        show-icon
+        :closable="false"
+        class="mb-14"
+        title="巡检班视角：古树档案与保护级别由保护科维护，本页只读；级别以保护科现档为准。"
+      />
 
       <FilterBar
         :keyword="treeStore.filters.keyword"
@@ -181,7 +192,7 @@ function handleFilterChange(key: string, value: string): void {
         v-if="treeStore.ready && treeStore.trees.length === 0"
         title="还没有古树档案"
         description="先为一株古树建立档案（编号、树种、保护级别、树龄、位置、管护单位），再登记树体检查与复壮措施。"
-        action-text="新建第一个古树档案"
+        :action-text="roleStore.isProtection() ? '新建第一个古树档案' : ''"
         @action="openCreate"
       />
 
@@ -258,8 +269,10 @@ function handleFilterChange(key: string, value: string): void {
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click.stop="goSurveys(row)">树体检查</el-button>
-            <el-button link type="primary" size="small" @click.stop="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" size="small" @click.stop="handleDelete(row)">删除</el-button>
+            <template v-if="roleStore.isProtection()">
+              <el-button link type="primary" size="small" @click.stop="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" size="small" @click.stop="handleDelete(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>

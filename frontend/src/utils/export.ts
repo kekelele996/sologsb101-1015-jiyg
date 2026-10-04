@@ -9,8 +9,10 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { CycleStandard } from '../types/cycle'
 import { stampSuffix } from './id'
 import { isSupportOverdue, overdueDays } from './dimension'
+import { cycleMonthsOf } from './cycle'
 
 /** 触发浏览器下载 */
 export function download(filename: string, content: string, mime: string): void {
@@ -66,6 +68,7 @@ export function parseSnapshot(text: string): SnapshotParseResult {
       snapshot: null,
     }
   }
+  // 仅强校验 v1 起就存在的五张核心表；v3 新增表允许缺失（导入时按空集合处理并重排）
   const collections: Array<keyof DatabaseSnapshot> = ['trees', 'surveys', 'measures', 'supports', 'reviews']
   for (const key of collections) {
     if (!Array.isArray(data[key])) {
@@ -75,6 +78,12 @@ export function parseSnapshot(text: string): SnapshotParseResult {
   return { ok: true, message: '存档校验通过。', snapshot: data as DatabaseSnapshot }
 }
 
+/** 以古树现档级别查保护科周期标准，取加固件生效周期月数 */
+function resolveCycleMonths(support: Support, trees: Tree[], standards: CycleStandard[]): number {
+  const level = trees.find((tree) => tree.id === support.treeId)?.protectLevel ?? support.cycleLevel
+  return cycleMonthsOf(level, standards)
+}
+
 /** 生成古树养护总览 CSV（一树一行） */
 export function buildTreeCsv(
   trees: Tree[],
@@ -82,6 +91,7 @@ export function buildTreeCsv(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  standards: CycleStandard[] = [],
 ): string {
   const header = [
     '编号',
@@ -115,7 +125,9 @@ export function buildTreeCsv(
     const treeSupports = supports.filter((row) => row.treeId === tree.id)
     const treeReviews = reviews.filter((row) => row.treeId === tree.id).sort((a, b) => a.date.localeCompare(b.date))
     const latestReview = treeReviews.length > 0 ? treeReviews[treeReviews.length - 1] : null
-    const overdue = treeSupports.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon))
+    const overdue = treeSupports.filter((row) =>
+      isSupportOverdue(row.lastCheckDate, resolveCycleMonths(row, trees, standards)),
+    )
     lines.push(
       [
         tree.code,
@@ -136,7 +148,11 @@ export function buildTreeCsv(
         treeMeasures.filter((row) => row.state === '已完成').length,
         tree.lastMeasureDate === '' ? '—' : tree.lastMeasureDate,
         treeSupports.length,
-        overdue.length === 0 ? '无' : overdue.map((row) => `${row.type}超期 ${overdueDays(row.lastCheckDate, row.checkCycleMon)} 天`).join('；'),
+        overdue.length === 0
+          ? '无'
+          : overdue
+              .map((row) => `${row.type}超期 ${overdueDays(row.lastCheckDate, resolveCycleMonths(row, trees, standards))} 天`)
+              .join('；'),
         treeReviews.length,
         latestReview === null ? '—' : latestReview.vigor,
         latestReview === null ? '—' : latestReview.trend,
@@ -155,9 +171,10 @@ export function exportTreeCsvFile(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  standards: CycleStandard[] = [],
 ): string {
   const filename = `古树名木养护总览-${stampSuffix()}.csv`
-  download(filename, buildTreeCsv(trees, surveys, measures, supports, reviews), 'text/csv;charset=utf-8')
+  download(filename, buildTreeCsv(trees, surveys, measures, supports, reviews, standards), 'text/csv;charset=utf-8')
   return filename
 }
 
@@ -180,12 +197,13 @@ export function buildTodoText(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  standards: CycleStandard[] = [],
 ): string {
   const lines: string[] = [`【古树名木复壮养护待办】共 ${trees.length} 株在档`]
   trees.forEach((tree) => {
     const pending = measures.filter((row) => row.treeId === tree.id && row.state !== '已完成').length
     const overdue = supports.filter(
-      (row) => row.treeId === tree.id && isSupportOverdue(row.lastCheckDate, row.checkCycleMon),
+      (row) => row.treeId === tree.id && isSupportOverdue(row.lastCheckDate, resolveCycleMonths(row, trees, standards)),
     ).length
     const treeReviews = reviews.filter((row) => row.treeId === tree.id).sort((a, b) => a.date.localeCompare(b.date))
     const latest = treeReviews.length > 0 ? treeReviews[treeReviews.length - 1] : null

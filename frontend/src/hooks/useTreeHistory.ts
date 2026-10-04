@@ -9,7 +9,9 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { CycleStandard } from '../types/cycle'
 import { db, initDatabase } from '../utils/db'
+import { cycleMonthsOf } from '../utils/cycle'
 
 /** 时间线条目类型 */
 export type HistoryKind = 'survey' | 'measure' | 'support' | 'review'
@@ -36,7 +38,8 @@ export function buildHistory(
   surveys: Survey[],
   measures: Measure[],
   supports: Support[],
-  reviews: Review[]
+  reviews: Review[],
+  resolveCycleMonths: (support: Support) => number = () => 12
 ): HistoryItem[] {
   const items: HistoryItem[] = []
   surveys.forEach((row) => {
@@ -65,7 +68,7 @@ export function buildHistory(
       kind: 'support',
       date: row.installDate,
       title: `加固件 · ${row.type}`,
-      detail: `安装于 ${row.installDate}，检查周期 ${row.checkCycleMon} 个月，最近检查 ${row.lastCheckDate || '未记录'}`,
+      detail: `安装于 ${row.installDate}，${row.cycleLevel} 保护对应检查周期 ${resolveCycleMonths(row)} 个月，最近检查 ${row.lastCheckDate || '未记录'}`,
       badge: row.type,
     })
   })
@@ -100,25 +103,31 @@ export function useTreeHistory(treeId: Ref<string | null> | string | null): UseT
   const measures = ref<Measure[]>([])
   const supports = ref<Support[]>([])
   const reviews = ref<Review[]>([])
+  const standards = ref<CycleStandard[]>([])
+  const trees = ref<{ id: string; protectLevel: import('../types/tree').ProtectLevel }[]>([])
   const loading = ref(true)
   const error = ref('')
 
   void initDatabase()
   const subscription = liveQuery(async () => {
     await initDatabase()
-    const [surveyRows, measureRows, supportRows, reviewRows] = await Promise.all([
+    const [surveyRows, measureRows, supportRows, reviewRows, standardRows, treeRows] = await Promise.all([
       db.surveys.toArray(),
       db.measures.toArray(),
       db.supports.toArray(),
       db.reviews.toArray(),
+      db.cycleStandards.toArray(),
+      db.trees.toArray(),
     ])
-    return { surveyRows, measureRows, supportRows, reviewRows }
+    return { surveyRows, measureRows, supportRows, reviewRows, standardRows, treeRows }
   }).subscribe({
-    next: ({ surveyRows, measureRows, supportRows, reviewRows }) => {
+    next: ({ surveyRows, measureRows, supportRows, reviewRows, standardRows, treeRows }) => {
       surveys.value = surveyRows
       measures.value = measureRows
       supports.value = supportRows
       reviews.value = reviewRows
+      standards.value = standardRows
+      trees.value = treeRows.map((tree) => ({ id: tree.id, protectLevel: tree.protectLevel }))
       loading.value = false
       error.value = ''
     },
@@ -132,6 +141,11 @@ export function useTreeHistory(treeId: Ref<string | null> | string | null): UseT
     subscription.unsubscribe()
   })
 
+  const resolveCycleMonths = (support: Support): number => {
+    const tree = trees.value.find((row) => row.id === support.treeId)
+    return cycleMonthsOf(tree?.protectLevel ?? support.cycleLevel, standards.value)
+  }
+
   const items = computed<HistoryItem[]>(() => {
     const id = idRef.value
     if (id === null || id === '') return []
@@ -139,7 +153,8 @@ export function useTreeHistory(treeId: Ref<string | null> | string | null): UseT
       surveys.value.filter((row) => row.treeId === id),
       measures.value.filter((row) => row.treeId === id),
       supports.value.filter((row) => row.treeId === id),
-      reviews.value.filter((row) => row.treeId === id)
+      reviews.value.filter((row) => row.treeId === id),
+      resolveCycleMonths
     )
   })
 

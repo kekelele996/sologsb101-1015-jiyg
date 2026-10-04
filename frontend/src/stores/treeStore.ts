@@ -11,6 +11,9 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review, Trend, Vigor } from '../types/review'
+import type { CycleStandard } from '../types/cycle'
+import type { SurveyBatch } from '../types/batch'
+import type { SupportCheckPlan } from '../types/plan'
 import { VIGOR_NEED_FOLLOW_UP } from '../types/review'
 import {
   DB_SCHEMA_VERSION,
@@ -29,6 +32,7 @@ import {
   leanLevel,
   type LeanLevel,
 } from '../utils/dimension'
+import { cycleMonthsOf } from '../utils/cycle'
 
 /** 古树筛选条件（关键字 + 保护级别 + 树种），由 <FilterBar> 同步到 URL query */
 export interface TreeFilters {
@@ -110,6 +114,9 @@ export const useTreeStore = defineStore('tree', () => {
   const measures = ref<Measure[]>([])
   const supports = ref<Support[]>([])
   const reviews = ref<Review[]>([])
+  const cycleStandards = ref<CycleStandard[]>([])
+  const batches = ref<SurveyBatch[]>([])
+  const plans = ref<SupportCheckPlan[]>([])
   const loading = ref(true)
   const ready = ref(false)
   const error = ref('')
@@ -121,6 +128,22 @@ export const useTreeStore = defineStore('tree', () => {
     const set = new Set(trees.value.map((tree) => tree.species))
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
   })
+
+  /** 古树现档保护级别（级别以现档为准，巡检带回的旧级别不参与任何计算） */
+  function levelOfTree(treeId: string): ProtectLevel | undefined {
+    return trees.value.find((tree) => tree.id === treeId)?.protectLevel
+  }
+
+  /** 加固件生效周期月数：按所属古树现档级别查保护科周期标准 */
+  function effectiveCycleMon(support: Support): number {
+    return cycleMonthsOf(levelOfTree(support.treeId) ?? support.cycleLevel, cycleStandards.value)
+  }
+
+  /** 加固件周期档位是否已因保护级别调整而过期（待下次对账重算） */
+  function supportLevelStale(support: Support): boolean {
+    const current = levelOfTree(support.treeId)
+    return current !== undefined && current !== support.cycleLevel
+  }
 
   const stats = computed<Record<string, TreeStat>>(() => {
     const result: Record<string, TreeStat> = {}
@@ -156,7 +179,9 @@ export const useTreeStore = defineStore('tree', () => {
         doneMeasureCount: treeMeasures.filter((row) => row.state === '已完成').length,
         pendingMeasureCount: treeMeasures.filter((row) => row.state !== '已完成').length,
         supportCount: treeSupports.length,
-        overdueCount: treeSupports.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon)).length,
+        overdueCount: treeSupports.filter((row) =>
+          isSupportOverdue(row.lastCheckDate, cycleMonthsOf(tree.protectLevel, cycleStandards.value)),
+        ).length,
         reviewCount: treeReviews.length,
         latestVigor: latestReview === null ? null : latestReview.vigor,
         latestTrend: latestReview === null ? null : latestReview.trend,
@@ -185,9 +210,25 @@ export const useTreeStore = defineStore('tree', () => {
     () => trees.value.find((tree) => tree.id === currentTreeId.value) ?? null
   )
 
+  /** 超期未检查的加固件（生效周期按古树现档级别 + 保护科周期标准） */
   const overdueSupports = computed<Support[]>(() =>
-    supports.value.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon))
+    supports.value.filter((row) =>
+      isSupportOverdue(row.lastCheckDate, cycleMonthsOf(levelOfTree(row.treeId) ?? row.cycleLevel, cycleStandards.value)),
+    )
   )
+
+  /** 取检查记录所属批次（未交回返回 null） */
+  function batchOfSurvey(surveyId: string): SurveyBatch | null {
+    const survey = surveys.value.find((row) => row.id === surveyId)
+    if (!survey || survey.batchId === '') return null
+    return batches.value.find((row) => row.id === survey.batchId) ?? null
+  }
+
+  /** 检查记录是否已锁定：进入已交回 / 已对账批次后巡检班不能再改 */
+  function isSurveyLocked(surveyId: string): boolean {
+    const batch = batchOfSurvey(surveyId)
+    return batch?.status === '已交回' || batch?.status === '已对账'
+  }
 
   function statOf(treeId: string): TreeStat {
     return stats.value[treeId] ?? { treeId, ...EMPTY_STAT }
@@ -201,22 +242,46 @@ export const useTreeStore = defineStore('tree', () => {
       if (!subscribed) {
         subscribed = true
         liveQuery(async () => {
-          const [treeRows, surveyRows, measureRows, supportRows, reviewRows] = await Promise.all([
+          const [
+            treeRows,
+            surveyRows,
+            measureRows,
+            supportRows,
+            reviewRows,
+            standardRows,
+            batchRows,
+            planRows,
+          ] = await Promise.all([
             db.trees.toArray(),
             db.surveys.toArray(),
             db.measures.toArray(),
             db.supports.toArray(),
             db.reviews.toArray(),
+            db.cycleStandards.toArray(),
+            db.surveyBatches.toArray(),
+            db.supportCheckPlans.toArray(),
           ])
-          return { treeRows, surveyRows, measureRows, supportRows, reviewRows }
+          return { treeRows, surveyRows, measureRows, supportRows, reviewRows, standardRows, batchRows, planRows }
         }).subscribe({
-          next: ({ treeRows, surveyRows, measureRows, supportRows, reviewRows }) => {
+          next: ({
+            treeRows,
+            surveyRows,
+            measureRows,
+            supportRows,
+            reviewRows,
+            standardRows,
+            batchRows,
+            planRows,
+          }) => {
             const sorted = [...treeRows].sort((a, b) => a.code.localeCompare(b.code, 'zh-Hans-CN'))
             trees.value = sorted
             surveys.value = surveyRows
             measures.value = measureRows
             supports.value = supportRows
             reviews.value = reviewRows
+            cycleStandards.value = standardRows
+            batches.value = batchRows
+            plans.value = planRows
             loading.value = false
             ready.value = true
             error.value = ''
@@ -305,6 +370,9 @@ export const useTreeStore = defineStore('tree', () => {
     measures,
     supports,
     reviews,
+    cycleStandards,
+    batches,
+    plans,
     loading,
     ready,
     error,
@@ -317,6 +385,11 @@ export const useTreeStore = defineStore('tree', () => {
     visibleTrees,
     overdueSupports,
     statOf,
+    levelOfTree,
+    effectiveCycleMon,
+    supportLevelStale,
+    batchOfSurvey,
+    isSurveyLocked,
     loadAll,
     selectTree,
     setFilters,

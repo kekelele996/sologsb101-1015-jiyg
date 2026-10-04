@@ -10,6 +10,7 @@ export const ROUTES = {
   surveys: (treeId: string): string => `/trees/${treeId}/surveys`,
   measures: '/measures',
   supports: '/supports',
+  batches: '/batches',
   reviews: '/reviews',
 } as const
 
@@ -38,6 +39,12 @@ const routes: RouteRecordRaw[] = [
     name: 'support-board',
     component: () => import('@/pages/SupportBoard.vue'),
     meta: { title: '支撑加固与避雷件' },
+  },
+  {
+    path: '/batches',
+    name: 'batch-board',
+    component: () => import('@/pages/BatchBoard.vue'),
+    meta: { title: '树体检查批次' },
   },
   {
     path: '/reviews',

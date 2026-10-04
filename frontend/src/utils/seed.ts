@@ -1,14 +1,20 @@
 /**
  * 演示数据播种（幂等）
  * 父 → 子 → 孙三层链路：古树 → 树体检查 / 复壮措施 / 加固件 / 长势复评
+ * v3 起补齐：周期标准、季度容量、检查批次（已对账 / 已交回 / 已退回 / 草稿）、待检计划。
  * 所有 id 固定，保证 /trees/:id/surveys 深链一定命中真实数据。
  */
-import { db, ROW_REVISION } from './db'
+import { db, ROW_REVISION, type AppSetting } from './db'
 import type { Tree } from '../types/tree'
 import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { CycleStandard } from '../types/cycle'
+import { DEFAULT_CYCLE_STANDARDS, DEFAULT_QUARTER_CAPACITY, SETTING_QUARTER_CAPACITY } from '../types/cycle'
+import type { SurveyBatch } from '../types/batch'
+import type { SupportCheckPlan } from '../types/plan'
+import { cycleMonthsOf, packByQuarterCapacity, quarterOf, supportDueDate } from './cycle'
 
 const SEED_TIME = '2026-01-08T01:30:00.000Z'
 
@@ -33,7 +39,7 @@ export async function seedDatabase(): Promise<void> {
   const exists = await db.trees.count()
   if (exists > 0) return
 
-  // ---------------- 古树档案（3 棵，覆盖三级保护级别） ----------------
+  // ---------------- 古树档案（3 棵，覆盖保护级别） ----------------
   const trees: Tree[] = [
     wrap<Tree>({
       id: SEED_IDS.treeA,
@@ -67,17 +73,19 @@ export async function seedDatabase(): Promise<void> {
     }),
   ]
 
-  // ---------------- 树体检查（每棵 2–3 次，数值随日期递增） ----------------
+  // ---------------- 树体检查（批次归属与级别快照） ----------------
+  // batch-1 已对账（b3）；batch-2 已交回（c3，带回旧级别「三级」与现档「二级」不符，供对账演示）；
+  // batch-3 已退回（c1）；其余记录未交回，可在编批次中继续上报。
   const surveys: Survey[] = [
-    wrap<Survey>({ id: 'survey-a1', treeId: SEED_IDS.treeA, date: '2023-05-18', heightM: 14.4, dbhCm: 97.5, crownM: 13.8, leanDeg: 3.6, hollowCount: 2, siteNote: '铺装' }),
-    wrap<Survey>({ id: 'survey-a2', treeId: SEED_IDS.treeA, date: '2024-06-02', heightM: 14.6, dbhCm: 99, crownM: 14.1, leanDeg: 4.1, hollowCount: 2, siteNote: '铺装' }),
-    wrap<Survey>({ id: 'survey-a3', treeId: SEED_IDS.treeA, date: '2026-05-08', heightM: 14.8, dbhCm: 100.2, crownM: 14.4, leanDeg: 4.4, hollowCount: 3, siteNote: '铺装' }),
-    wrap<Survey>({ id: 'survey-b1', treeId: SEED_IDS.treeB, date: '2024-07-18', heightM: 18.2, dbhCm: 118.4, crownM: 16.2, leanDeg: 1.8, hollowCount: 0, siteNote: '裸土' }),
-    wrap<Survey>({ id: 'survey-b2', treeId: SEED_IDS.treeB, date: '2025-08-02', heightM: 18.5, dbhCm: 120.1, crownM: 16.6, leanDeg: 2.1, hollowCount: 0, siteNote: '裸土' }),
-    wrap<Survey>({ id: 'survey-b3', treeId: SEED_IDS.treeB, date: '2026-07-15', heightM: 18.7, dbhCm: 121.3, crownM: 16.9, leanDeg: 2.3, hollowCount: 1, siteNote: '裸土' }),
-    wrap<Survey>({ id: 'survey-c1', treeId: SEED_IDS.treeC, date: '2024-08-15', heightM: 9.6, dbhCm: 62.5, crownM: 7.4, leanDeg: 11.2, hollowCount: 4, siteNote: '积水' }),
-    wrap<Survey>({ id: 'survey-c2', treeId: SEED_IDS.treeC, date: '2025-08-20', heightM: 9.7, dbhCm: 63.1, crownM: 7.1, leanDeg: 12.4, hollowCount: 4, siteNote: '积水' }),
-    wrap<Survey>({ id: 'survey-c3', treeId: SEED_IDS.treeC, date: '2026-07-20', heightM: 9.7, dbhCm: 63.4, crownM: 6.9, leanDeg: 12.8, hollowCount: 5, siteNote: '铺装' }),
+    wrap<Survey>({ id: 'survey-a1', treeId: SEED_IDS.treeA, date: '2023-05-18', heightM: 14.4, dbhCm: 97.5, crownM: 13.8, leanDeg: 3.6, hollowCount: 2, siteNote: '铺装', protectLevelSnapshot: '', batchId: '' }),
+    wrap<Survey>({ id: 'survey-a2', treeId: SEED_IDS.treeA, date: '2024-06-02', heightM: 14.6, dbhCm: 99, crownM: 14.1, leanDeg: 4.1, hollowCount: 2, siteNote: '铺装', protectLevelSnapshot: '', batchId: '' }),
+    wrap<Survey>({ id: 'survey-a3', treeId: SEED_IDS.treeA, date: '2026-05-08', heightM: 14.8, dbhCm: 100.2, crownM: 14.4, leanDeg: 4.4, hollowCount: 3, siteNote: '铺装', protectLevelSnapshot: '', batchId: '' }),
+    wrap<Survey>({ id: 'survey-b1', treeId: SEED_IDS.treeB, date: '2024-07-18', heightM: 18.2, dbhCm: 118.4, crownM: 16.2, leanDeg: 1.8, hollowCount: 0, siteNote: '裸土', protectLevelSnapshot: '', batchId: '' }),
+    wrap<Survey>({ id: 'survey-b2', treeId: SEED_IDS.treeB, date: '2025-08-02', heightM: 18.5, dbhCm: 120.1, crownM: 16.6, leanDeg: 2.1, hollowCount: 0, siteNote: '裸土', protectLevelSnapshot: '', batchId: '' }),
+    wrap<Survey>({ id: 'survey-b3', treeId: SEED_IDS.treeB, date: '2026-07-15', heightM: 18.7, dbhCm: 121.3, crownM: 16.9, leanDeg: 2.3, hollowCount: 1, siteNote: '裸土', protectLevelSnapshot: '一级', batchId: 'batch-1' }),
+    wrap<Survey>({ id: 'survey-c1', treeId: SEED_IDS.treeC, date: '2024-08-15', heightM: 9.6, dbhCm: 62.5, crownM: 7.4, leanDeg: 11.2, hollowCount: 4, siteNote: '积水', protectLevelSnapshot: '二级', batchId: 'batch-3' }),
+    wrap<Survey>({ id: 'survey-c2', treeId: SEED_IDS.treeC, date: '2025-08-20', heightM: 9.7, dbhCm: 63.1, crownM: 7.1, leanDeg: 12.4, hollowCount: 4, siteNote: '积水', protectLevelSnapshot: '', batchId: '' }),
+    wrap<Survey>({ id: 'survey-c3', treeId: SEED_IDS.treeC, date: '2026-07-20', heightM: 9.7, dbhCm: 63.4, crownM: 6.9, leanDeg: 12.8, hollowCount: 5, siteNote: '铺装', protectLevelSnapshot: '三级', batchId: 'batch-2' }),
   ]
 
   // ---------------- 复壮措施（每棵 2–3 条，覆盖三种状态） ----------------
@@ -92,13 +100,14 @@ export async function seedDatabase(): Promise<void> {
     wrap<Measure>({ id: 'measure-c2', treeId: SEED_IDS.treeC, type: '病虫害防治', date: '2026-05-06', material: '生物制剂 2 次施药', operator: '周敏', state: '计划' }),
   ]
 
-  // ---------------- 加固件（含超周期未检查的样本） ----------------
+  // ---------------- 加固件（周期档位取古树现档级别；最近检查仅对账回写） ----------------
+  // treeB 拉纤已在 batch-1 对账，最近检查 2026-07-15；treeA 支撑杆 / treeC 避雷仍超期。
   const supports: Support[] = [
-    wrap<Support>({ id: 'support-a1', treeId: SEED_IDS.treeA, type: '支撑杆', installDate: '2019-04-08', checkCycleMon: 24, lastCheckDate: '2024-03-15' }),
-    wrap<Support>({ id: 'support-a2', treeId: SEED_IDS.treeA, type: '避雷', installDate: '2020-07-01', checkCycleMon: 24, lastCheckDate: '2025-06-01' }),
-    wrap<Support>({ id: 'support-b1', treeId: SEED_IDS.treeB, type: '拉纤', installDate: '2021-09-20', checkCycleMon: 36, lastCheckDate: '2024-08-10' }),
-    wrap<Support>({ id: 'support-c1', treeId: SEED_IDS.treeC, type: '避雷', installDate: '2018-06-01', checkCycleMon: 12, lastCheckDate: '2025-05-20' }),
-    wrap<Support>({ id: 'support-c2', treeId: SEED_IDS.treeC, type: '支撑杆', installDate: '2022-05-10', checkCycleMon: 12, lastCheckDate: '2026-05-08' }),
+    wrap<Support>({ id: 'support-a1', treeId: SEED_IDS.treeA, type: '支撑杆', installDate: '2019-04-08', cycleLevel: '一级', lastCheckDate: '2024-03-15' }),
+    wrap<Support>({ id: 'support-a2', treeId: SEED_IDS.treeA, type: '避雷', installDate: '2020-07-01', cycleLevel: '一级', lastCheckDate: '2025-06-01' }),
+    wrap<Support>({ id: 'support-b1', treeId: SEED_IDS.treeB, type: '拉纤', installDate: '2021-09-20', cycleLevel: '一级', lastCheckDate: '2026-07-15' }),
+    wrap<Support>({ id: 'support-c1', treeId: SEED_IDS.treeC, type: '避雷', installDate: '2018-06-01', cycleLevel: '二级', lastCheckDate: '2025-05-20' }),
+    wrap<Support>({ id: 'support-c2', treeId: SEED_IDS.treeC, type: '支撑杆', installDate: '2022-05-10', cycleLevel: '二级', lastCheckDate: '2026-05-08' }),
   ]
 
   // ---------------- 长势复评（衰弱 / 濒危样本均带后续措施） ----------------
@@ -112,11 +121,136 @@ export async function seedDatabase(): Promise<void> {
     wrap<Review>({ id: 'review-c3', treeId: SEED_IDS.treeC, date: '2026-07-20', vigor: '衰弱', trend: '好转', conclusion: '排水改造后积水缓解，新梢萌发量回升。', followUp: '继续按季度监测倾斜度与空洞变化，年度复壮计划中保留透气措施。' }),
   ]
 
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await db.trees.bulkPut(trees)
-    await db.surveys.bulkPut(surveys)
-    await db.measures.bulkPut(measures)
-    await db.supports.bulkPut(supports)
-    await db.reviews.bulkPut(reviews)
+  // ---------------- 周期标准（保护科按保护级别定） ----------------
+  const standards: CycleStandard[] = (['一级', '二级', '三级'] as const).map((level) =>
+    wrap<CycleStandard>({ id: level, checkCycleMon: DEFAULT_CYCLE_STANDARDS[level] }),
+  )
+
+  // ---------------- 季度容量 ----------------
+  const settings: AppSetting[] = [
+    { id: SETTING_QUARTER_CAPACITY, value: DEFAULT_QUARTER_CAPACITY, updatedAt: SEED_TIME },
+  ]
+
+  // ---------------- 检查批次（四种状态各一） ----------------
+  const batches: SurveyBatch[] = [
+    wrap<SurveyBatch>({
+      id: 'batch-1',
+      name: '2026 年三季度香山片区巡检',
+      visitDate: '2026-07-15',
+      plannedCount: 1,
+      surveyIds: ['survey-b3'],
+      status: '已对账',
+      levelSnapshot: { [SEED_IDS.treeB]: '一级' },
+      returnReason: '',
+      submittedAt: '2026-07-16T02:00:00.000Z',
+      reconciledAt: '2026-07-17T02:00:00.000Z',
+    }),
+    wrap<SurveyBatch>({
+      id: 'batch-2',
+      name: '2026 年三季度日坛公园巡检',
+      visitDate: '2026-07-20',
+      plannedCount: 1,
+      surveyIds: ['survey-c3'],
+      status: '已交回',
+      // 巡检带回的旧级别为三级，古树现档已由保护科调整为二级 —— 对账以现档为准
+      levelSnapshot: { [SEED_IDS.treeC]: '三级' },
+      returnReason: '',
+      submittedAt: '2026-07-21T02:00:00.000Z',
+      reconciledAt: '',
+    }),
+    wrap<SurveyBatch>({
+      id: 'batch-3',
+      name: '2024 年三季度日坛公园巡检',
+      visitDate: '2024-08-15',
+      plannedCount: 1,
+      surveyIds: ['survey-c1'],
+      status: '已退回',
+      levelSnapshot: { [SEED_IDS.treeC]: '二级' },
+      returnReason: '胸径数值与现场复核不符（62.5cm 疑误填），整批退回核实后重报。',
+      submittedAt: '2024-08-16T02:00:00.000Z',
+      reconciledAt: '',
+    }),
+    wrap<SurveyBatch>({
+      id: 'batch-4',
+      name: '2026 年四季度国子监片区巡检（在编）',
+      visitDate: '2026-10-02',
+      plannedCount: 1,
+      surveyIds: [],
+      status: '草稿',
+      levelSnapshot: {},
+      returnReason: '',
+      submittedAt: '',
+      reconciledAt: '',
+    }),
+  ]
+
+  // ---------------- 待检计划：按周期标准 + 季度容量装箱 ----------------
+  const levelOfTree = new Map(trees.map((tree) => [tree.id, tree.protectLevel]))
+  const packInput = supports.map((support) => {
+    const level = levelOfTree.get(support.treeId) ?? support.cycleLevel
+    const months = cycleMonthsOf(level, standards)
+    return {
+      supportId: support.id,
+      treeId: support.treeId,
+      dueDate: supportDueDate(support, months),
+      cycleLevel: level,
+      checkCycleMon: months,
+    }
   })
+  const packed = packByQuarterCapacity(packInput, DEFAULT_QUARTER_CAPACITY, quarterOf('2026-10-04'))
+  const plans: SupportCheckPlan[] = packed.map((item) =>
+    wrap<SupportCheckPlan>({
+      id: `plan-${item.supportId}`,
+      supportId: item.supportId,
+      treeId: item.treeId,
+      quarter: item.quarter,
+      dueDate: item.dueDate,
+      cycleLevel: item.cycleLevel,
+      checkCycleMon: item.checkCycleMon,
+      status: '待检',
+      checkedDate: '',
+      sourceBatchId: '',
+    }),
+  )
+  // batch-1 对账时完成检查的历史计划（已查冻结，后续重排不再改动）
+  plans.push(
+    wrap<SupportCheckPlan>({
+      id: 'plan-support-b1-done',
+      supportId: 'support-b1',
+      treeId: SEED_IDS.treeB,
+      quarter: '2026Q3',
+      dueDate: '2026-07-15',
+      cycleLevel: '一级',
+      checkCycleMon: DEFAULT_CYCLE_STANDARDS.一级,
+      status: '已查',
+      checkedDate: '2026-07-15',
+      sourceBatchId: 'batch-1',
+    }),
+  )
+
+  await db.transaction(
+    'rw',
+    [
+      db.trees,
+      db.surveys,
+      db.measures,
+      db.supports,
+      db.reviews,
+      db.cycleStandards,
+      db.appSettings,
+      db.surveyBatches,
+      db.supportCheckPlans,
+    ],
+    async () => {
+      await db.trees.bulkPut(trees)
+      await db.surveys.bulkPut(surveys)
+      await db.measures.bulkPut(measures)
+      await db.supports.bulkPut(supports)
+      await db.reviews.bulkPut(reviews)
+      await db.cycleStandards.bulkPut(standards)
+      await db.appSettings.bulkPut(settings)
+      await db.surveyBatches.bulkPut(batches)
+      await db.supportCheckPlans.bulkPut(plans)
+    },
+  )
 }

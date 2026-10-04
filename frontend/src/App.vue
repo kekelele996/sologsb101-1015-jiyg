@@ -1,14 +1,15 @@
 <script setup lang="ts">
 /**
- * 应用外壳：顶部导航 + 当前古树上下文 + 内容区 + 页脚
+ * 应用外壳：顶部导航 + 角色切换（巡检班 / 保护科） + 当前古树上下文 + 内容区 + 页脚
  * 同时负责初始化本地数据库与 Pinia store 的数据订阅。
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Files, FirstAidKit, Histogram, OfficeBuilding } from '@element-plus/icons-vue'
+import { Coin, Files, FirstAidKit, Histogram, OfficeBuilding, Promotion } from '@element-plus/icons-vue'
 import { useTreeStore } from '@/stores/treeStore'
 import { useMeasureStore } from '@/stores/measureStore'
 import { useReviewStore } from '@/stores/reviewStore'
+import { useRoleStore, ROLE_OPTIONS, type Role } from '@/stores/roleStore'
 import { ROUTES } from '@/router'
 
 const route = useRoute()
@@ -16,6 +17,7 @@ const router = useRouter()
 const treeStore = useTreeStore()
 const measureStore = useMeasureStore()
 const reviewStore = useReviewStore()
+const roleStore = useRoleStore()
 
 const navItems = computed(() => {
   const currentTreeId = treeStore.currentTreeId
@@ -28,6 +30,7 @@ const navItems = computed(() => {
       badge: String(treeStore.surveys.length),
       disabled: currentTreeId === null,
     },
+    { path: ROUTES.batches, label: '检查批次', icon: Promotion, badge: String(treeStore.batches.length) },
     { path: ROUTES.measures, label: '复壮措施', icon: FirstAidKit, badge: String(treeStore.measures.length) },
     { path: ROUTES.supports, label: '加固件', icon: Coin, badge: String(treeStore.supports.length) },
     { path: ROUTES.reviews, label: '长势复评', icon: Histogram, badge: String(treeStore.reviews.length) },
@@ -52,6 +55,10 @@ onMounted(() => {
 
 function go(path: string): void {
   void router.push(path)
+}
+
+function switchRole(role: Role): void {
+  roleStore.setRole(role)
 }
 </script>
 
@@ -81,6 +88,20 @@ function go(path: string): void {
         </button>
       </nav>
       <div class="app-header__meta">
+        <el-radio-group
+          :model-value="roleStore.role"
+          size="small"
+          @update:model-value="(value: Role) => switchRole(value)"
+        >
+          <el-radio-button
+            v-for="item in ROLE_OPTIONS"
+            :key="item"
+            :value="item"
+            :label="item"
+          >
+            {{ item }}
+          </el-radio-button>
+        </el-radio-group>
         <el-tag v-if="treeStore.currentTree" type="success" effect="dark">
           当前古树：{{ treeStore.currentTree.code }} {{ treeStore.currentTree.species }}
         </el-tag>

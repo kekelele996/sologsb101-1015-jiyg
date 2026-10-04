@@ -15,6 +15,7 @@ import { useIdbTable } from '@/hooks/useIdbTable'
 import { HISTORY_KIND_LABEL, useTreeHistory } from '@/hooks/useTreeHistory'
 import { useReviewStore } from '@/stores/reviewStore'
 import { useTreeStore } from '@/stores/treeStore'
+import { useRoleStore } from '@/stores/roleStore'
 import { DB_NAME, DB_SCHEMA_VERSION, db, exportSnapshot, importSnapshot, resetDatabase } from '@/utils/db'
 import { exportSnapshotJson, exportTreeCsvFile, parseSnapshot } from '@/utils/export'
 import { TREND_OPTIONS, VIGOR_OPTIONS, VIGOR_NEED_FOLLOW_UP, type Review, type ReviewDraft, type Trend, type Vigor } from '@/types/review'
@@ -22,6 +23,7 @@ import { TREND_OPTIONS, VIGOR_OPTIONS, VIGOR_NEED_FOLLOW_UP, type Review, type R
 const router = useRouter()
 const treeStore = useTreeStore()
 const reviewStore = useReviewStore()
+const roleStore = useRoleStore()
 
 const { rows, loading, remove } = useIdbTable<Review>(db.reviews, { sortByUpdatedAt: false })
 
@@ -173,7 +175,8 @@ function handleExportCsv(): void {
     treeStore.surveys,
     treeStore.measures,
     treeStore.supports,
-    treeStore.reviews
+    treeStore.reviews,
+    treeStore.cycleStandards
   )
   ElMessage.success(`已导出古树养护总览 ${filename}`)
 }
@@ -247,7 +250,15 @@ function handleFilterChange(key: string, value: string): void {
     </div>
 
     <el-alert
-      v-if="reviewStore.followUpMissing > 0"
+      v-if="roleStore.isPatrol()"
+      type="info"
+      show-icon
+      :closable="false"
+      class="mb-14"
+      title="巡检班视角：长势复评结论由保护科登记，本页仅查看。"
+    />
+    <el-alert
+      v-else-if="reviewStore.followUpMissing > 0"
       type="error"
       show-icon
       :closable="false"
@@ -261,7 +272,7 @@ function handleFilterChange(key: string, value: string): void {
         <el-card shadow="never">
           <template #header>
             <div class="card-header">
-              <span class="card-header__title">长势复评与结构版本</span>
+              <span class="card-header__title">长势复评与结构版本（保护科结论）</span>
               <el-space wrap>
                 <el-button @click="handleExport">
                   <el-icon><Download /></el-icon>
@@ -271,22 +282,24 @@ function handleFilterChange(key: string, value: string): void {
                   <el-icon><Download /></el-icon>
                   <span>导出 CSV 汇总</span>
                 </el-button>
-                <el-upload
-                  :auto-upload="false"
-                  :show-file-list="false"
-                  accept=".json"
-                  :on-change="handleImport"
-                >
-                  <el-button>
-                    <el-icon><Upload /></el-icon>
-                    <span>导入 JSON 存档</span>
+                <template v-if="roleStore.isProtection()">
+                  <el-upload
+                    :auto-upload="false"
+                    :show-file-list="false"
+                    accept=".json"
+                    :on-change="handleImport"
+                  >
+                    <el-button>
+                      <el-icon><Upload /></el-icon>
+                      <span>导入 JSON 存档</span>
+                    </el-button>
+                  </el-upload>
+                  <el-button type="danger" plain @click="handleReset">重置演示数据</el-button>
+                  <el-button type="primary" @click="openCreate" :disabled="treeStore.trees.length === 0">
+                    <el-icon><Plus /></el-icon>
+                    <span>新增复评</span>
                   </el-button>
-                </el-upload>
-                <el-button type="danger" plain @click="handleReset">重置演示数据</el-button>
-                <el-button type="primary" @click="openCreate" :disabled="treeStore.trees.length === 0">
-                  <el-icon><Plus /></el-icon>
-                  <span>新增复评</span>
-                </el-button>
+                </template>
               </el-space>
             </div>
           </template>
@@ -318,7 +331,7 @@ function handleFilterChange(key: string, value: string): void {
             v-if="rows.length === 0 && !loading"
             title="还没有长势复评记录"
             description="按次登记长势（旺盛 / 一般 / 衰弱 / 濒危）与趋势，衰弱或濒危时必须填写后续措施。"
-            action-text="新增第一条复评"
+            :action-text="roleStore.isProtection() ? '新增第一条复评' : ''"
             @action="openCreate"
           />
 
@@ -366,8 +379,11 @@ function handleFilterChange(key: string, value: string): void {
             </el-table-column>
             <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" size="small" @click.stop="openEdit(row)">编辑</el-button>
-                <el-button link type="danger" size="small" @click.stop="handleDelete(row)">删除</el-button>
+                <template v-if="roleStore.isProtection()">
+                  <el-button link type="primary" size="small" @click.stop="openEdit(row)">编辑</el-button>
+                  <el-button link type="danger" size="small" @click.stop="handleDelete(row)">删除</el-button>
+                </template>
+                <span v-else class="cell-sub">保护科结论</span>
               </template>
             </el-table-column>
           </el-table>

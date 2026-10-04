@@ -12,17 +12,19 @@ import StatBadge from '@/components/common/StatBadge.vue'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import { HISTORY_KIND_LABEL, useTreeHistory } from '@/hooks/useTreeHistory'
 import { useTreeStore } from '@/stores/treeStore'
-import { db } from '@/utils/db'
+import { useRoleStore } from '@/stores/roleStore'
+import { db, removeSurvey } from '@/utils/db'
 import { SITE_NOTE_OPTIONS, type SiteNote, type Survey, type SurveyDraft } from '@/types/survey'
 import { LEAN_DANGER_DEG, LEAN_WATCH_DEG, annualGrowth, hollowRisk, leanLevel, siteAdvice } from '@/utils/dimension'
 
 const route = useRoute()
 const router = useRouter()
 const treeStore = useTreeStore()
+const roleStore = useRoleStore()
 
 const treeId = computed<string>(() => String(route.params.id ?? ''))
 const tree = computed(() => treeStore.trees.find((item) => item.id === treeId.value) ?? null)
-const { rows, loading, create, update, remove } = useIdbTable<Survey>(db.surveys, { sortByUpdatedAt: false })
+const { rows, loading, create, update } = useIdbTable<Survey>(db.surveys, { sortByUpdatedAt: false })
 const { items } = useTreeHistory(treeId)
 
 const dialogVisible = ref(false)
@@ -57,6 +59,16 @@ const surveys = computed<Survey[]>(() =>
     .filter((row) => row.treeId === treeId.value)
     .sort((a, b) => a.date.localeCompare(b.date))
 )
+
+/** 巡检班可编辑：仅本人角色且记录未进入已交回 / 已对账批次 */
+function canEdit(row: Survey): boolean {
+  return roleStore.isPatrol() && !treeStore.isSurveyLocked(row.id)
+}
+
+/** 记录所属批次状态标签（未交回返回空串） */
+function batchStateLabel(row: Survey): string {
+  return treeStore.batchOfSurvey(row.id)?.status ?? ''
+}
 
 /** 表格展示顺序：日期倒序 */
 const displayRows = computed<Survey[]>(() => [...surveys.value].reverse())
@@ -95,6 +107,7 @@ onMounted(() => {
 })
 
 function openCreate(): void {
+  if (!canCreate.value) return
   editingId.value = null
   Object.assign(form, {
     treeId: treeId.value,
@@ -110,6 +123,7 @@ function openCreate(): void {
 }
 
 function openEdit(row: Survey): void {
+  if (!canEdit(row)) return
   editingId.value = row.id
   Object.assign(form, {
     treeId: row.treeId,
@@ -131,8 +145,11 @@ async function handleSubmit(): Promise<void> {
   submitting.value = true
   try {
     if (editingId.value === null) {
-      await create({ ...form }, 'survey')
-      ElMessage.success('树体检查记录已登记')
+      await create(
+        { ...form, protectLevelSnapshot: '', batchId: '' },
+        'survey',
+      )
+      ElMessage.success('树体检查记录已登记，可在编检查批次中加入并交回')
     } else {
       await update(editingId.value, { ...form })
       ElMessage.success('检查记录已更新')
@@ -140,7 +157,7 @@ async function handleSubmit(): Promise<void> {
     if (leanLevel(form.leanDeg) === 'danger') {
       ElMessage({
         type: 'warning',
-        message: `倾斜度 ${form.leanDeg}° 超过 ${LEAN_DANGER_DEG}° 警戒线，建议安排支撑加固`,
+        message: `倾斜度 ${form.leanDeg}° 超过 ${LEAN_DANGER_DEG}° 警戒线；现场发现只记入检查记录，加固件检查周期照旧排，不因本次发现改动。`,
         duration: 6000,
       })
     }
@@ -153,6 +170,7 @@ async function handleSubmit(): Promise<void> {
 }
 
 async function handleDelete(row: Survey): Promise<void> {
+  if (!canEdit(row)) return
   try {
     await ElMessageBox.confirm(`确认删除 ${row.date} 的检查记录？`, '删除确认', {
       type: 'warning',
@@ -162,9 +180,12 @@ async function handleDelete(row: Survey): Promise<void> {
   } catch {
     return
   }
-  await remove(row.id)
+  await removeSurvey(row.id)
   ElMessage.success('检查记录已删除')
 }
+
+/** 巡检班才能新增检查；保护科一侧只读 */
+const canCreate = computed<boolean>(() => roleStore.isPatrol())
 </script>
 
 <template>
@@ -242,7 +263,7 @@ async function handleDelete(row: Survey): Promise<void> {
         :closable="false"
         class="mb-14"
         :title="risk.message"
-        :description="latest === null ? '' : siteAdvice(latest.siteNote)"
+        :description="`${latest === null ? '' : siteAdvice(latest.siteNote)} 现场发现仅记入检查记录，加固件检查周期照旧排，需调整时由保护科在批次对账中处理。`"
       />
       <el-alert
         v-else-if="latest !== null && leanLevel(latest.leanDeg) !== 'safe'"
@@ -253,25 +274,34 @@ async function handleDelete(row: Survey): Promise<void> {
         :title="`倾斜度 ${latest.leanDeg}°，超过 ${leanLevel(latest.leanDeg) === 'danger' ? LEAN_DANGER_DEG : LEAN_WATCH_DEG}° 阈值`"
         :description="siteAdvice(latest.siteNote)"
       />
+      <el-alert
+        v-if="roleStore.isProtection()"
+        type="info"
+        show-icon
+        :closable="false"
+        class="mb-14"
+        title="保护科视角：树体检查记录由巡检班登记并整批交回，本页仅查看；批次核对与对账请到「检查批次」页。"
+      />
 
       <el-row :gutter="14">
         <el-col :xs="24" :lg="16">
           <el-card shadow="never">
             <template #header>
               <div class="card-header">
-                <span class="card-header__title">树体与立地检查记录</span>
-                <el-button type="primary" @click="openCreate">
+                <span class="card-header__title">树体与立地检查记录（巡检班记录）</span>
+                <el-button v-if="roleStore.isPatrol()" type="primary" @click="openCreate">
                   <el-icon><Plus /></el-icon>
                   <span>新增检查</span>
                 </el-button>
+                <el-tag v-else type="info" effect="plain">保护科只读</el-tag>
               </div>
             </template>
 
             <EmptyPanel
               v-if="surveys.length === 0 && !loading"
               title="该古树还没有检查记录"
-              description="录入树高、胸径、冠幅、倾斜度、空洞数与立地状况，系统会自动与上次检查对比并计算年生长量。"
-              action-text="新增第一次检查"
+              description="录入树高、胸径、冠幅、倾斜度、空洞数与立地状况，系统会自动与上次检查对比并计算年生长量。上门才发现的倾斜超限 / 空洞高风险只记入记录，加固件周期照旧排。"
+              :action-text="roleStore.isPatrol() ? '新增第一次检查' : ''"
               @action="openCreate"
             />
 
@@ -319,10 +349,28 @@ async function handleDelete(row: Survey): Promise<void> {
                   <el-tag size="small" type="info">{{ row.siteNote }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="140" fixed="right">
+              <el-table-column label="交回状态" width="110">
                 <template #default="{ row }">
-                  <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-                  <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+                  <el-tag
+                    v-if="batchStateLabel(row) !== ''"
+                    size="small"
+                    :type="batchStateLabel(row) === '已对账' ? 'success' : batchStateLabel(row) === '已退回' ? 'danger' : 'warning'"
+                    effect="plain"
+                  >
+                    {{ batchStateLabel(row) }}
+                  </el-tag>
+                  <span v-else class="cell-sub">未交回</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="150" fixed="right">
+                <template #default="{ row }">
+                  <template v-if="canEdit(row)">
+                    <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+                    <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+                  </template>
+                  <span v-else class="cell-sub">
+                    {{ roleStore.isPatrol() ? '已锁定' : '保护科只读' }}
+                  </span>
                 </template>
               </el-table-column>
             </el-table>
