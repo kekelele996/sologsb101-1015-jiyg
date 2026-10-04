@@ -11,6 +11,7 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review, Trend, Vigor } from '../types/review'
+import type { CycleStandard } from '../types/cycle'
 import { VIGOR_NEED_FOLLOW_UP } from '../types/review'
 import {
   DB_SCHEMA_VERSION,
@@ -25,10 +26,10 @@ import { nowIso, uuid } from '../utils/id'
 import {
   LEAN_LEVEL_LABEL,
   annualGrowth,
-  isSupportOverdue,
   leanLevel,
   type LeanLevel,
 } from '../utils/dimension'
+import { isSupportOverdueEffective } from '../utils/scheduling'
 
 /** 古树筛选条件（关键字 + 保护级别 + 树种），由 <FilterBar> 同步到 URL query */
 export interface TreeFilters {
@@ -110,6 +111,8 @@ export const useTreeStore = defineStore('tree', () => {
   const measures = ref<Measure[]>([])
   const supports = ref<Support[]>([])
   const reviews = ref<Review[]>([])
+  /** 保护科按保护级别发布的加固件检查周期标准（周期判定唯一来源） */
+  const cycleStandards = ref<CycleStandard[]>([])
   const loading = ref(true)
   const ready = ref(false)
   const error = ref('')
@@ -156,7 +159,9 @@ export const useTreeStore = defineStore('tree', () => {
         doneMeasureCount: treeMeasures.filter((row) => row.state === '已完成').length,
         pendingMeasureCount: treeMeasures.filter((row) => row.state !== '已完成').length,
         supportCount: treeSupports.length,
-        overdueCount: treeSupports.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon)).length,
+        overdueCount: treeSupports.filter((row) =>
+          isSupportOverdueEffective(row, tree, cycleStandards.value)
+        ).length,
         reviewCount: treeReviews.length,
         latestVigor: latestReview === null ? null : latestReview.vigor,
         latestTrend: latestReview === null ? null : latestReview.trend,
@@ -186,7 +191,10 @@ export const useTreeStore = defineStore('tree', () => {
   )
 
   const overdueSupports = computed<Support[]>(() =>
-    supports.value.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon))
+    supports.value.filter((row) => {
+      const tree = trees.value.find((item) => item.id === row.treeId) ?? null
+      return isSupportOverdueEffective(row, tree, cycleStandards.value)
+    })
   )
 
   function statOf(treeId: string): TreeStat {
@@ -201,22 +209,25 @@ export const useTreeStore = defineStore('tree', () => {
       if (!subscribed) {
         subscribed = true
         liveQuery(async () => {
-          const [treeRows, surveyRows, measureRows, supportRows, reviewRows] = await Promise.all([
-            db.trees.toArray(),
-            db.surveys.toArray(),
-            db.measures.toArray(),
-            db.supports.toArray(),
-            db.reviews.toArray(),
-          ])
-          return { treeRows, surveyRows, measureRows, supportRows, reviewRows }
+          const [treeRows, surveyRows, measureRows, supportRows, reviewRows, standardRows] =
+            await Promise.all([
+              db.trees.toArray(),
+              db.surveys.toArray(),
+              db.measures.toArray(),
+              db.supports.toArray(),
+              db.reviews.toArray(),
+              db.cycleStandards.toArray(),
+            ])
+          return { treeRows, surveyRows, measureRows, supportRows, reviewRows, standardRows }
         }).subscribe({
-          next: ({ treeRows, surveyRows, measureRows, supportRows, reviewRows }) => {
+          next: ({ treeRows, surveyRows, measureRows, supportRows, reviewRows, standardRows }) => {
             const sorted = [...treeRows].sort((a, b) => a.code.localeCompare(b.code, 'zh-Hans-CN'))
             trees.value = sorted
             surveys.value = surveyRows
             measures.value = measureRows
             supports.value = supportRows
             reviews.value = reviewRows
+            cycleStandards.value = standardRows
             loading.value = false
             ready.value = true
             error.value = ''
@@ -305,6 +316,7 @@ export const useTreeStore = defineStore('tree', () => {
     measures,
     supports,
     reviews,
+    cycleStandards,
     loading,
     ready,
     error,

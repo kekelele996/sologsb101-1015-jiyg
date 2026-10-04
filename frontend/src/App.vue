@@ -5,10 +5,11 @@
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Coin, Files, FirstAidKit, Histogram, OfficeBuilding } from '@element-plus/icons-vue'
+import { Coin, Files, Finished, FirstAidKit, Histogram, OfficeBuilding } from '@element-plus/icons-vue'
 import { useTreeStore } from '@/stores/treeStore'
 import { useMeasureStore } from '@/stores/measureStore'
 import { useReviewStore } from '@/stores/reviewStore'
+import { useSupportStore } from '@/stores/supportStore'
 import { ROUTES } from '@/router'
 
 const route = useRoute()
@@ -16,6 +17,7 @@ const router = useRouter()
 const treeStore = useTreeStore()
 const measureStore = useMeasureStore()
 const reviewStore = useReviewStore()
+const supportStore = useSupportStore()
 
 const navItems = computed(() => {
   const currentTreeId = treeStore.currentTreeId
@@ -29,7 +31,13 @@ const navItems = computed(() => {
       disabled: currentTreeId === null,
     },
     { path: ROUTES.measures, label: '复壮措施', icon: FirstAidKit, badge: String(treeStore.measures.length) },
-    { path: ROUTES.supports, label: '加固件', icon: Coin, badge: String(treeStore.supports.length) },
+    { path: ROUTES.supports, label: '加固件台账', icon: Coin, badge: String(treeStore.supports.length) },
+    {
+      path: ROUTES.inspections,
+      label: '检查批次',
+      icon: Finished,
+      badge: String(supportStore.pendingBatches.length + supportStore.returnedBatches.length),
+    },
     { path: ROUTES.reviews, label: '长势复评', icon: Histogram, badge: String(treeStore.reviews.length) },
   ]
 })
@@ -48,6 +56,7 @@ onMounted(() => {
   void treeStore.loadAll()
   void measureStore.init()
   void reviewStore.init()
+  void supportStore.loadAll()
 })
 
 function go(path: string): void {

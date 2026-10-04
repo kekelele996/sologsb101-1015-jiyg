@@ -1,5 +1,4 @@
-/**
- * 路由表：/trees、/trees/:id/surveys、/measures、/supports、/reviews
+/** 路由表：/trees、/trees/:id/surveys、/measures、/supports、/inspections、/reviews
  * 层级路由支持直接深链访问（配合 nginx try_files 回退）；页面按路由懒加载自动分包。
  */
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
@@ -10,6 +9,7 @@ export const ROUTES = {
   surveys: (treeId: string): string => `/trees/${treeId}/surveys`,
   measures: '/measures',
   supports: '/supports',
+  inspections: '/inspections',
   reviews: '/reviews',
 } as const
 
@@ -37,7 +37,13 @@ const routes: RouteRecordRaw[] = [
     path: '/supports',
     name: 'support-board',
     component: () => import('@/pages/SupportBoard.vue'),
-    meta: { title: '支撑加固与避雷件' },
+    meta: { title: '加固件台账与季度排期（保护科）' },
+  },
+  {
+    path: '/inspections',
+    name: 'inspection-board',
+    component: () => import('@/pages/InspectionBoard.vue'),
+    meta: { title: '加固件检查批次（巡检班 / 保护科对账）' },
   },
   {
     path: '/reviews',

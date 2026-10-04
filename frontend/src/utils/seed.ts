@@ -9,6 +9,10 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { CycleStandard } from '../types/cycle'
+import type { InspectionBatch } from '../types/inspection'
+import type { AppSetting } from '../types/setting'
+import { SETTING_ID } from '../types/setting'
 
 const SEED_TIME = '2026-01-08T01:30:00.000Z'
 
@@ -92,13 +96,112 @@ export async function seedDatabase(): Promise<void> {
     wrap<Measure>({ id: 'measure-c2', treeId: SEED_IDS.treeC, type: '病虫害防治', date: '2026-05-06', material: '生物制剂 2 次施药', operator: '周敏', state: '计划' }),
   ]
 
-  // ---------------- 加固件（含超周期未检查的样本） ----------------
+  // ---------------- 加固件（含超周期未检查的样本；周期按保护科级别定档） ----------------
+  // 一级古树：6 个月一查；二级古树：12 个月一查。
+  // a1（一级 / 2024-03 后未查）、c1（二级 / 2025-05 后未查）故意超期，用于验证高亮与排期；
+  // 容量有限（每季 2 件）时可看到到期件排队等下一批。
   const supports: Support[] = [
-    wrap<Support>({ id: 'support-a1', treeId: SEED_IDS.treeA, type: '支撑杆', installDate: '2019-04-08', checkCycleMon: 24, lastCheckDate: '2024-03-15' }),
-    wrap<Support>({ id: 'support-a2', treeId: SEED_IDS.treeA, type: '避雷', installDate: '2020-07-01', checkCycleMon: 24, lastCheckDate: '2025-06-01' }),
-    wrap<Support>({ id: 'support-b1', treeId: SEED_IDS.treeB, type: '拉纤', installDate: '2021-09-20', checkCycleMon: 36, lastCheckDate: '2024-08-10' }),
-    wrap<Support>({ id: 'support-c1', treeId: SEED_IDS.treeC, type: '避雷', installDate: '2018-06-01', checkCycleMon: 12, lastCheckDate: '2025-05-20' }),
-    wrap<Support>({ id: 'support-c2', treeId: SEED_IDS.treeC, type: '支撑杆', installDate: '2022-05-10', checkCycleMon: 12, lastCheckDate: '2026-05-08' }),
+    wrap<Support>({ id: 'support-a1', treeId: SEED_IDS.treeA, type: '支撑杆', installDate: '2019-04-08', checkCycleMon: 6, lastCheckDate: '2024-03-15', scheduledQuarter: '2026Q4', reconciledAt: '' }),
+    wrap<Support>({ id: 'support-a2', treeId: SEED_IDS.treeA, type: '避雷', installDate: '2020-07-01', checkCycleMon: 6, lastCheckDate: '2026-03-30', scheduledQuarter: '', reconciledAt: '' }),
+    wrap<Support>({ id: 'support-b1', treeId: SEED_IDS.treeB, type: '拉纤', installDate: '2021-09-20', checkCycleMon: 6, lastCheckDate: '2024-08-10', scheduledQuarter: '', reconciledAt: '' }),
+    wrap<Support>({ id: 'support-c1', treeId: SEED_IDS.treeC, type: '避雷', installDate: '2018-06-01', checkCycleMon: 12, lastCheckDate: '2025-05-20', scheduledQuarter: '', reconciledAt: '' }),
+    wrap<Support>({ id: 'support-c2', treeId: SEED_IDS.treeC, type: '支撑杆', installDate: '2022-05-10', checkCycleMon: 12, lastCheckDate: '2026-05-08', scheduledQuarter: '', reconciledAt: '' }),
+  ]
+
+  // ---------------- 保护科：周期标准（按保护级别定档）与每季度检查容量 ----------------
+  const cycleStandards: CycleStandard[] = [
+    wrap<CycleStandard>({ id: '一级', checkCycleMon: 6 }),
+    wrap<CycleStandard>({ id: '二级', checkCycleMon: 12 }),
+    wrap<CycleStandard>({ id: '三级', checkCycleMon: 24 }),
+  ]
+
+  const setting: AppSetting = wrap<AppSetting>({ id: SETTING_ID, quarterCapacity: 2 })
+
+  // ---------------- 巡检班：加固件检查批次（待对账 / 已退回 / 已对账各一） ----------------
+  const batches: InspectionBatch[] = [
+    // 待对账：带回的旧级别（侧柏为二级）与现档一致/不一致仅提示，不影响整批通过
+    wrap<InspectionBatch>({
+      id: 'batch-2026q3-1',
+      batchNo: '2026-Q3-01',
+      quarter: '2026Q3',
+      state: '待对账',
+      returnReason: '',
+      reconciledAt: '',
+      items: [
+        {
+          itemId: 'batch-2026q3-1-i1',
+          supportId: 'support-c2',
+          type: '支撑杆',
+          reportedLevel: '三级',
+          checkDate: '2026-09-18',
+          note: '支撑杆根部螺栓无松动，杆体无锈蚀；现场测得倾斜 12.8°，倾斜问题仍在树体检查记录中跟踪，不改变本件周期。',
+          check: '待校验',
+          rejectReason: '',
+        },
+        {
+          itemId: 'batch-2026q3-1-i2',
+          supportId: 'support-a2',
+          type: '避雷',
+          checkDate: '2026-09-25',
+          reportedLevel: '一级',
+          note: '避雷带连接完好，接地电阻实测合格。',
+          check: '待校验',
+          rejectReason: '',
+        },
+      ],
+    }),
+    // 已退回：整批中有一条检查日期晚于今天（预检补登），整批退回重报，保护科台账不动
+    wrap<InspectionBatch>({
+      id: 'batch-2026q3-2',
+      batchNo: '2026-Q3-02',
+      quarter: '2026Q3',
+      state: '已退回',
+      returnReason: '第 1 条检查日期晚于今天，不能预检补登；整批退回，请更正后整批重新上报。',
+      reconciledAt: '',
+      items: [
+        {
+          itemId: 'batch-2026q3-2-i1',
+          supportId: 'support-b1',
+          type: '拉纤',
+          reportedLevel: '一级',
+          checkDate: '2026-12-30',
+          note: '拉纤张力正常（待更正检查日期后重新上报）。',
+          check: '不通过',
+          rejectReason: '检查日期晚于今天，不能预检补登',
+        },
+        {
+          itemId: 'batch-2026q3-2-i2',
+          supportId: 'support-c1',
+          type: '避雷',
+          reportedLevel: '二级',
+          checkDate: '2026-09-20',
+          note: '避雷带有锈蚀痕迹，建议下批安排除锈防腐。',
+          check: '待校验',
+          rejectReason: '',
+        },
+      ],
+    }),
+    // 已对账：历史批次，覆盖到的加固件已按当时最新检查日期重算
+    wrap<InspectionBatch>({
+      id: 'batch-2026q1-1',
+      batchNo: '2026-Q1-01',
+      quarter: '2026Q1',
+      state: '已对账',
+      returnReason: '',
+      reconciledAt: '2026-04-02T03:10:00.000Z',
+      items: [
+        {
+          itemId: 'batch-2026q1-1-i1',
+          supportId: 'support-a2',
+          type: '避雷',
+          reportedLevel: '一级',
+          checkDate: '2026-03-30',
+          note: '避雷带连接完好，接地电阻实测合格。',
+          check: '通过',
+          rejectReason: '',
+        },
+      ],
+    }),
   ]
 
   // ---------------- 长势复评（衰弱 / 濒危样本均带后续措施） ----------------
@@ -112,11 +215,27 @@ export async function seedDatabase(): Promise<void> {
     wrap<Review>({ id: 'review-c3', treeId: SEED_IDS.treeC, date: '2026-07-20', vigor: '衰弱', trend: '好转', conclusion: '排水改造后积水缓解，新梢萌发量回升。', followUp: '继续按季度监测倾斜度与空洞变化，年度复壮计划中保留透气措施。' }),
   ]
 
-  await db.transaction('rw', db.trees, db.surveys, db.measures, db.supports, db.reviews, async () => {
-    await db.trees.bulkPut(trees)
-    await db.surveys.bulkPut(surveys)
-    await db.measures.bulkPut(measures)
-    await db.supports.bulkPut(supports)
-    await db.reviews.bulkPut(reviews)
-  })
+  await db.transaction(
+    'rw',
+    [
+      db.trees,
+      db.surveys,
+      db.measures,
+      db.supports,
+      db.reviews,
+      db.cycleStandards,
+      db.inspectionBatches,
+      db.settings,
+    ],
+    async () => {
+      await db.trees.bulkPut(trees)
+      await db.surveys.bulkPut(surveys)
+      await db.measures.bulkPut(measures)
+      await db.supports.bulkPut(supports)
+      await db.reviews.bulkPut(reviews)
+      await db.cycleStandards.bulkPut(cycleStandards)
+      await db.inspectionBatches.bulkPut(batches)
+      await db.settings.put(setting)
+    }
+  )
 }

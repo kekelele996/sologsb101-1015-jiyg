@@ -9,8 +9,10 @@ import type { Survey } from '../types/survey'
 import type { Measure } from '../types/measure'
 import type { Support } from '../types/support'
 import type { Review } from '../types/review'
+import type { CycleStandard } from '../types/cycle'
 import { stampSuffix } from './id'
-import { isSupportOverdue, overdueDays } from './dimension'
+import { overdueDays } from './dimension'
+import { effectiveCycleMon, isSupportOverdueEffective } from './scheduling'
 
 /** 触发浏览器下载 */
 export function download(filename: string, content: string, mime: string): void {
@@ -66,8 +68,9 @@ export function parseSnapshot(text: string): SnapshotParseResult {
       snapshot: null,
     }
   }
-  const collections: Array<keyof DatabaseSnapshot> = ['trees', 'surveys', 'measures', 'supports', 'reviews']
-  for (const key of collections) {
+  // v1/v2 存档只要求原有五张表；v3 新增的周期标准 / 批次 / 设置缺省时导入后按现档回填
+  const requiredCollections: Array<keyof DatabaseSnapshot> = ['trees', 'surveys', 'measures', 'supports', 'reviews']
+  for (const key of requiredCollections) {
     if (!Array.isArray(data[key])) {
       return { ok: false, message: `存档缺少 ${String(key)} 数组。`, snapshot: null }
     }
@@ -82,6 +85,7 @@ export function buildTreeCsv(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  standards: CycleStandard[] = [],
 ): string {
   const header = [
     '编号',
@@ -115,7 +119,7 @@ export function buildTreeCsv(
     const treeSupports = supports.filter((row) => row.treeId === tree.id)
     const treeReviews = reviews.filter((row) => row.treeId === tree.id).sort((a, b) => a.date.localeCompare(b.date))
     const latestReview = treeReviews.length > 0 ? treeReviews[treeReviews.length - 1] : null
-    const overdue = treeSupports.filter((row) => isSupportOverdue(row.lastCheckDate, row.checkCycleMon))
+    const overdue = treeSupports.filter((row) => isSupportOverdueEffective(row, tree, standards))
     lines.push(
       [
         tree.code,
@@ -136,7 +140,7 @@ export function buildTreeCsv(
         treeMeasures.filter((row) => row.state === '已完成').length,
         tree.lastMeasureDate === '' ? '—' : tree.lastMeasureDate,
         treeSupports.length,
-        overdue.length === 0 ? '无' : overdue.map((row) => `${row.type}超期 ${overdueDays(row.lastCheckDate, row.checkCycleMon)} 天`).join('；'),
+        overdue.length === 0 ? '无' : overdue.map((row) => `${row.type}超期 ${overdueDays(row.lastCheckDate === '' ? row.installDate : row.lastCheckDate, effectiveCycleMon(row, tree, standards))} 天`).join('；'),
         treeReviews.length,
         latestReview === null ? '—' : latestReview.vigor,
         latestReview === null ? '—' : latestReview.trend,
@@ -155,9 +159,10 @@ export function exportTreeCsvFile(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  standards: CycleStandard[] = [],
 ): string {
   const filename = `古树名木养护总览-${stampSuffix()}.csv`
-  download(filename, buildTreeCsv(trees, surveys, measures, supports, reviews), 'text/csv;charset=utf-8')
+  download(filename, buildTreeCsv(trees, surveys, measures, supports, reviews, standards), 'text/csv;charset=utf-8')
   return filename
 }
 
@@ -180,12 +185,13 @@ export function buildTodoText(
   measures: Measure[],
   supports: Support[],
   reviews: Review[],
+  standards: CycleStandard[] = [],
 ): string {
   const lines: string[] = [`【古树名木复壮养护待办】共 ${trees.length} 株在档`]
   trees.forEach((tree) => {
     const pending = measures.filter((row) => row.treeId === tree.id && row.state !== '已完成').length
     const overdue = supports.filter(
-      (row) => row.treeId === tree.id && isSupportOverdue(row.lastCheckDate, row.checkCycleMon),
+      (row) => row.treeId === tree.id && isSupportOverdueEffective(row, tree, standards),
     ).length
     const treeReviews = reviews.filter((row) => row.treeId === tree.id).sort((a, b) => a.date.localeCompare(b.date))
     const latest = treeReviews.length > 0 ? treeReviews[treeReviews.length - 1] : null
